@@ -1,130 +1,212 @@
-# SSH Server
+# SSH Server MC
 
-给 NeoForge 服务端内嵌一个 SSH 服务器：装一个 mod，就能用 `ssh` 远程操作服务器的宿主 shell 和 MC 控制台，不需要外部 sshd，也不需要 RCON。
+**Manage your Minecraft server through SSH and SFTP — directly from your Minecraft server.**
 
-## 它能做什么
+SSH Server MC is a server-side NeoForge mod that provides SSH access to a running Minecraft server. It allows administrators to execute Minecraft commands remotely, access a server-side shell, and transfer files using standard SSH and SFTP clients.
 
-| 你想做的事 | 以前 | 装了 SSH Server |
-|---|---|---|
-| 在服务器宿主上执行命令（装 mod、改文件、看进程） | 面板/物理机登录 | `ssh user@host -p 2222 "命令"` |
-| 传文件进/出服务器 | 面板文件管理器 | `sftp -P 2222 user@host` |
-| 执行 MC 命令（whitelist、op、stop…） | RCON / 面板控制台 | `ssh mc@host -p 2222` 或 `ssh mc@host "whitelist add xxx"` |
-| 实时看服务器日志 | 翻 latest.log | 登录 `mc` 用户，日志自动推到会话里 |
 
-双模式设计：
+## Features
 
-- **物理 shell 模式** — 用配置文件里定义的真实用户名登录，得到 MC 进程所在宿主的真实 shell（Linux 是 bash，Windows 是 cmd）
-- **MC 控制台模式** — 用虚拟用户名（默认 `mc`）登录，得到一个 MC 控制台会话：输入 MC 命令、实时回显服务器日志
+- **SSH access** — Connect to your Minecraft server using standard SSH clients.
+- **Remote Minecraft console** — Execute Minecraft commands without joining the game.
+- **Shell access** — Run operating system commands under the permissions of the Minecraft server process.
+- **SFTP file transfers** — Upload and download server files using standard SFTP clients.
+- **SSH authentication** — Configure supported authentication methods through the server configuration.
 
-## 环境要求
+## Compatibility
 
-- Minecraft 1.21.x / NeoForge 21.1+（**仅服务端**，客户端装了也不会起 SSH）
-- 宿主有 `bash`（Linux）或 `cmd.exe`（Windows）——一般都有
+| Requirement | Details |
+|---|---|
+| Minecraft | 1.21.1|
+| Mod loader | NeoForge |
+| Java | Java 21 |
 
-## 安装
+## Installation
 
-1. 把 `sshserver-x.y.z.jar` 放进服务器的 `mods/` 目录
-2. 启动一次服务器——mod 会在游戏目录下创建 `config/sshd/` 工作目录并自动生成 SSH host key（`ssh_host_ed25519_key`，**会持久保留，客户端首次连接的指纹提示就来自它**）
-3. 首次启动会因为没有配置文件而在日志里报一行 `[sshserver] sshd 退出: 缺少配置文件 .../config/sshd/sshserver.properties`，这是预期的——下一步写配置
+1. Download the JAR from the project's [GitHub Releases](https://github.com/woyxiang/ssh-server-mc/releases) or the distribution platform hosting the release.
+2. Place the JAR in your Minecraft server's `mods` directory.
+3. Start the server once to initialize the mod and check the startup log.
+4. Follow the configuration instructions below.
+5. Restart the server after changing configuration.
 
-## 配置
+**Important:** Do not expose the SSH service to the public internet until you have reviewed the authentication settings, bind address, firewall rules, and operating system permissions.
 
-编辑 `<游戏目录>/config/sshd/sshserver.properties`：
+## Configuration
 
-```properties
-# SSH 监听端口
-port=2222
+SSH Server MC uses a properties-based configuration file.
 
-# 监听地址。0.0.0.0 = 所有网卡（请确认防火墙策略）；
-# 只想本机/内网用就写 127.0.0.1，配合 SSH 隧道访问
-bind=0.0.0.0
+The expected configuration path is:
 
-# 物理 shell 用户，格式 用户名:密码，逗号分隔多个
-# 注意：这些用户名只用于 SSH 登录，与宿主系统账户无关！
-# 登录后执行的命令以「运行 MC 进程的系统用户」身份运行
-users=root:改成你的密码,admin:另一个密码
+`config/sshd/sshserver.properties`
 
-# MC 控制台的虚拟用户名（留空 = 禁用控制台模式）
-console-user=mc
+The exact options depend on the version you have installed. Refer to the comments in the generated configuration and the documentation shipped with your release.
 
-# mc 用户的密码
-console-password=改成你的密码
-```
+Before enabling remote access, review the following settings:
 
-重启服务器（改配置必须重启），日志出现这行即成功：
+| Setting | Purpose |
+|---|---|
+| Bind address | Determines which network interfaces accept connections |
+| SSH port | Sets the TCP port used by the SSH service |
+| Authentication | Controls which login methods are permitted |
+| User configuration | Defines SSH login identities and their access modes |
+| Host key | Identifies the SSH server to connecting clients |
 
-```
-[sshserver] sshd listening on 0.0.0.0:2222 (base=/path/to/sshd, shell=[root,admin] console=[mc])
-```
+Use `127.0.0.1` for local-only access when supported by your configuration. If remote access is required, explicitly configure the intended network interface and restrict access with your firewall.
 
-### 公钥登录（可选，推荐）
 
-把 OpenSSH 公钥放进 `config/sshd/authorized_keys/<用户名>`（一个文件对应一个用户，标准 authorized_keys 格式）：
+### Security recommendations
 
-```bash
-# 本机执行，把你的公钥装到服务器的 root 用户上
-cat ~/.ssh/id_ed25519.pub | ssh root@host -p 2222 "cat >> config/sshd/authorized_keys/root"
-# 或者手动编辑服务器上的 config/sshd/authorized_keys/root 文件
-```
+- Run Minecraft under a dedicated, unprivileged operating system account.
+- Use SSH public-key authentication where supported and disable password authentication if it is not needed.
+- Use strong, unique credentials if password authentication remains enabled.
+- Restrict inbound connections with firewall rules or a private network.
+- Keep the mod and its bundled dependencies up to date.
+- Avoid running the Minecraft server as `root` or an administrator account.
 
-配置了公钥的用户可以免密登录，密码认证同时仍然有效。
+**Shell access is powerful.** Commands executed through the shell inherit the operating system permissions of the Minecraft server process. An SSH username configured by this mod is not necessarily a separate operating system account.
 
-## 使用
+## Connecting over SSH
 
-### 物理 shell
+You can use OpenSSH on Linux, macOS, or Windows, or another compatible SSH client.
 
-```bash
-ssh root@host -p 2222              # 交互式 shell
-ssh root@host -p 2222 "ls mods"    # 单命令（exec 模式），输出后自动退出
-sftp -P 2222 root@host             # SFTP 文件传输
-```
+Assuming the server is reachable at `192.0.2.10` and SSH is configured to listen on port `2222`:
 
-### MC 控制台
+### Connect interactively
 
 ```bash
-ssh mc@host -p 2222                # 交互式控制台
-ssh mc@host -p 2222 "list"         # 单命令，等 3 秒收集输出后退出
+ssh -p 2222 <username>@192.0.2.10
 ```
 
-交互式登录后你会看到 motd（服务器状态 + 在线人数），之后：
+Replace `<username>` with an account configured for SSH Server MC.
 
-- 直接输入 MC 命令（`list`、`whitelist add xxx`、`say hi`、`stop`…），等同在服务器控制台输入
-- 服务器日志实时回显在你的会话里（其他玩家加入、报错等都能看到）
-- `exit` 或 `quit` 退出；`mc` 用户不能使用 SFTP
+### Execute a Minecraft command
 
-## 安全模型
-
-- **防爆破**：认证失败每次延迟 3 秒；同一 IP 累计失败 3 次直接断开
-- **密码存储**：`sshserver.properties` 是明文，请确保文件权限（该目录只有运行 MC 的用户可读）
-- **host key**：首次启动生成后固定不变；更换会导致客户端报 host key 警告（删除 `config/sshd/ssh_host_ed25519_key*` 可重置）
-- **网络暴露**：`bind=0.0.0.0` 会把 SSH 暴露到所有网卡。公网服务器建议：
-  - 保持 `bind=127.0.0.1`，用跳板/隧道访问；或
-  - 防火墙只放行可信 IP；或
-  - 全部用户改用公钥认证，并设置强密码兜底
-
-## 构建
-
-标准 Gradle 工程（ModDevGradle 插件，依赖自动从 Maven 下载）：
+If the account is configured for Minecraft console access, you can execute a command remotely:
 
 ```bash
-gradle build       # 需要 JDK 21（工具链自动探测）
-# 产物: build/libs/sshserver-<版本>.jar（可直接放入 mods/）
+ssh -p 2222 <username>@192.0.2.10 "list"
 ```
 
-依赖关系由 shadow 合并处理：
+Other examples include:
 
-- MINA SSHD（core/common/sftp）+ eddsa 打进 mod jar
-- **slf4j 排除在外**——NeoForge 自带 `org.slf4j` 模块，重复的包会导致 JPMS `ResolutionException` 崩服
-- MINA sshd 的部分包横跨 core/common 两个 jar（历史设计），因此不能用 Jar-in-Jar 分发，必须合并
+```bash
+ssh -p 2222 <username>@192.0.2.10 "time query daytime"
+ssh -p 2222 <username>@192.0.2.10 "weather query"
+```
 
-本地起一个开发服务器：`gradle runServer`。
-## 已知限制
+The available commands depend on the permissions of the connected account and the Minecraft server.
 
-- 物理 shell 没有 PTY：没有 tab 补全 / 光标控制，vim 这类全屏程序显示会乱（日常命令、脚本执行没问题）
-- Windows 交互模式使用 PowerShell（回显与行编辑由 PowerShell 自带）；cmd 仅用于 exec 单命令模式（`chcp 65001` 输出 UTF-8）——cmd 在 UTF-8 码页下从管道读多字节输入会异常退出（Windows 自身缺陷），故交互模式不用 cmd
-- exec 模式的 MC 命令输出固定等 3 秒（命令输出要经服务器日志回流），大输出的命令可能被截断
-- MC 控制台的命令由服务器主线程执行，刷屏类命令（如超大范围的 `forceload`）会卡服务器，请像对待服务器控制台一样对待它
+### Run shell commands
+
+For an account configured for shell access, you can execute operating system commands:
+
+```bash
+ssh -p 2222 <username>@192.0.2.10 "ls"
+```
+
+On Windows, the available commands depend on the shell and operating system environment.
+
+Shell access and Minecraft console access are different operating modes. Use the appropriate account and mode for the operation you intend to perform.
+
+## File transfers with SFTP
+
+If SFTP is enabled for your account, connect using:
+
+```bash
+sftp -P 2222 <username>@192.0.2.10
+```
+
+Common SFTP commands include:
+
+```text
+ls
+pwd
+cd world
+get server.properties
+put server.properties
+exit
+```
+
+Use SFTP to manage files without requiring a graphical file-transfer client.
+
+**File access considerations:** Treat SFTP access as access to server data. Review the permissions of the Minecraft process and avoid granting file-transfer access to untrusted users.
+
+## Troubleshooting
+
+### I cannot connect
+
+- Verify that the Minecraft server is running.
+- Check the configured bind address and SSH port.
+- Confirm that the firewall allows connections to the configured port.
+- Check the server log for startup errors.
+- Verify that your client is connecting to the correct address.
+
+### Authentication fails
+
+- Verify the configured username and authentication method.
+- Check the server log for authentication errors.
+- Confirm that your SSH client is using the intended key or password.
+- Review whether password authentication or public-key authentication is enabled for the account.
+
+### Minecraft commands return incomplete output
+
+Command execution and output collection may depend on the command and the mod version. Some commands may produce delayed or extensive output.
+
+If you encounter incomplete results, include the exact command, Minecraft version, mod version, and relevant server logs when reporting the issue.
+
+### Interactive terminal applications do not work correctly
+
+Full-screen applications such as `vim` require a proper pseudo-terminal (PTY). Interactive terminal support may be limited in versions that do not implement PTY allocation.
+
+If you need advanced interactive shell functionality, check the limitations documented for your installed release.
+
+### The server fails to start
+
+- Confirm that the Minecraft and NeoForge versions match the supported release.
+- Verify that Java 21 is being used.
+- Check the configuration syntax and file paths.
+- Look for errors related to SSH initialization, port binding, or missing dependencies.
+
+## Known Limitations
+
+Depending on the installed version, the following limitations may apply:
+
+- Interactive shell sessions may not support PTY allocation.
+- Some terminal applications may not work as expected.
+- Minecraft command output collection may not handle every long-running or high-volume command perfectly.
+- Compatibility outside the versions explicitly tested by the release is not guaranteed.
+
+See the project's [Issues](https://github.com/woyxiang/ssh-server-mc/issues) page for known problems and ongoing development.
+
+## Contributing and Bug Reports
+
+Bug reports, feature requests, and contributions are welcome.
+
+When opening an issue, please include:
+
+- Minecraft version
+- NeoForge version
+- SSH Server MC version
+- Operating system
+- Steps to reproduce the problem
+- Relevant server logs, with passwords, private keys, IP addresses, and other sensitive information removed
+
+Please avoid posting credentials or production configuration files in public issues.
 
 ## License
 
-MIT
+See the [LICENSE](LICENSE) file for the project's license.
+
+Third-party dependencies may be distributed under their own licenses.
+
+## Disclaimer
+
+SSH Server MC provides remote access to a Minecraft server and may expose operating system command execution or server file access, depending on its configuration.
+
+You are responsible for securing your server, configuring appropriate access controls, and protecting your credentials. Do not expose the service to untrusted networks without understanding the associated risks.
+
+---
+
+**Repository:** [woyxiang/ssh-server-mc](https://github.com/woyxiang/ssh-server-mc)
+
+If you find this project useful, consider starring the repository, reporting bugs, or contributing improvements.
