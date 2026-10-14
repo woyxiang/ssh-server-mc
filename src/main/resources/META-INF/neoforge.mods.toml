@@ -1,0 +1,24 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+
+[[mods]]
+modId="sshserver"
+version="${version}"
+displayName="SSH Server"
+description="Embedded SSH server for NeoForge servers: physical shell access with real usernames, MC console mode via a virtual user, and SFTP. No external sshd required."
+authors="woyxiang"
+
+[[dependencies.sshserver]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.0,)"
+ordering="NONE"
+side="SERVER"
+
+[[dependencies.sshserver]]
+modId="minecraft"
+type="required"
+versionRange="[1.21,1.22)"
+ordering="NONE"
+side="SERVER"

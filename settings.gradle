@@ -1,0 +1,11 @@
+// 国内网络优化：插件解析走阿里云/BMCLAPI 镜像（pluginManagement 必须是第一个块）
+pluginManagement {
+    repositories {
+        maven { url = 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url = 'https://bmclapi2.bangbang93.com/maven' }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'shellmc'

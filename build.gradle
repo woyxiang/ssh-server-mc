@@ -1,0 +1,81 @@
+plugins {
+    id 'java-library'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+version = project.mod_version
+group = project.mod_group
+
+base { archivesName = project.mod_id }
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+repositories {
+    // 国内网络优化：BMCLAPI 镜像 neoforged maven，阿里云镜像 mavenCentral
+    maven { url = 'https://bmclapi2.bangbang93.com/maven' }
+    maven { url = 'https://maven.aliyun.com/repository/public' }
+    mavenCentral()
+}
+
+configurations {
+    // 仅 shadow 合并用：MINA sshd 的 org.apache.sshd.server 包横跨 core/common 两个 jar，
+    // 不能用 Jar-in-Jar 分开加载（JPMS split package 崩溃），必须合并进 mod jar
+    shaded
+    implementation { extendsFrom shaded }
+}
+
+neoForge {
+    // NeoForge 版本：编译期 API + 本地 runServer/runClient 测试环境
+    version = "21.1.77"
+    runs {
+        server {
+            server()
+        }
+    }
+    mods {
+        "${project.mod_id}" { sourceSet sourceSets.main }
+    }
+}
+
+dependencies {
+    // FML 注解与加载 API（@Mod / FMLPaths），运行时由 NeoForge 提供
+    compileOnly "net.neoforged.fancymodloader:loader:4.0.45"
+
+    shaded "org.apache.sshd:sshd-core:2.14.0"
+    shaded "org.apache.sshd:sshd-common:2.14.0"
+    shaded "org.apache.sshd:sshd-sftp:2.14.0"
+    // MINA 2.14 的 EdDSA 只认 net.i2p 实现，缺它 ssh-ed25519 无法协商
+    shaded "net.i2p.crypto:eddsa:0.3.0"
+}
+
+// toml 里的 \${version} 由 gradle.properties 的 mod_version 注入（单点维护）
+processResources {
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand 'version': project.mod_version
+    }
+}
+
+shadowJar {
+    archiveClassifier.set('')
+    // 只合并 shaded 配置（4 个库）；neoforge/FML/slf4j 由此天然隔离，
+    // slf4j 若进 jar 会与 NeoForge 自带 org.slf4j 模块 split-package 冲突崩服
+    configurations = [project.configurations.shaded]
+    dependencies {
+        exclude(dependency('org.slf4j:slf4j-api'))
+    }
+    exclude 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*',
+            'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/INDEX.LIST',
+            'META-INF/versions/**/module-info.class', 'module-info.class'
+    mergeServiceFiles()
+}
+
+// shadowJar 取代默认 jar 作为构建产物
+jar { enabled = false }
+assemble { dependsOn shadowJar }
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

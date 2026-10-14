@@ -1,0 +1,31 @@
+# Gradle
+.gradle/
+build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+
+# 本地测试环境：服务器本体、JDK、安装包、密钥、日志（脚本 *.py / *.md 保留）
+test/server/
+test/inst2/
+test/jdk*/
+test/*.tar.gz
+test/*.jar
+test/server-run.log
+test/id_test*
+test/tmux-logs/
+
+# OS
+Thumbs.db
+.DS_Store
+# AI 协作工具配置（个人）
+.agents/
+.pi/
+# AI 协作工具配置（个人）
+.agents/
+.pi/
+__pycache__/
+*.pyc
