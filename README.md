@@ -39,19 +39,32 @@ The expected configuration path is:
 
 `config/sshd/sshserver.properties`
 
-The exact options depend on the version you have installed. Refer to the comments in the generated configuration and the documentation shipped with your release.
+On first start the mod generates this file with commented defaults. **The generated configuration denies every login**: `users` and `console-password` are empty, and the service binds to `127.0.0.1`. Credentials must be configured explicitly before any login succeeds; invalid values (for example an out-of-range port) abort startup with a clear error instead of leaving a partially working service. The file is never rewritten automatically, and the generated comments are the authoritative reference for the installed version.
 
-Before enabling remote access, review the following settings:
+### Options
 
-| Setting | Purpose |
-|---|---|
-| Bind address | Determines which network interfaces accept connections |
-| SSH port | Sets the TCP port used by the SSH service |
-| Authentication | Controls which login methods are permitted |
-| User configuration | Defines SSH login identities and their access modes |
-| Host key | Identifies the SSH server to connecting clients |
+| Option | Default | Purpose |
+|---|---|---|
+| `bind` | `127.0.0.1` | Listen address. `0.0.0.0` is accepted but logs a startup warning |
+| `port` | `2222` | SSH listen port (validated to 1–65535) |
+| `password-auth-enabled` | `true` | Master switch for password authentication |
+| `public-key-auth-enabled` | `true` | Master switch for public-key authentication |
+| `users` | *(empty)* | Shell accounts, comma-separated `username:password` entries; an empty list denies all password logins. Public keys go to `authorized_keys/<username>` in the same directory |
+| `console-user` / `console-password` | `mc` / *(empty)* | Minecraft console account; an empty password denies console login |
+| `shell-enabled` | `true` | Global switch for OS shell access |
+| `console-enabled` | `true` | Global switch for Minecraft console access |
+| `sftp-enabled` | `true` | Global switch for the SFTP subsystem |
+| `max-connections` | `8` | Maximum concurrent SSH sessions |
+| `max-auth-requests` | `3` | Maximum authentication attempts per session |
+| `auth-failures-per-ip` | `5` | Failures per source IP before lockout |
+| `auth-lockout-seconds` | `60` | Lockout window for blocked IPs; locked addresses are rejected without blocking server threads |
+| `auth-timeout-seconds` | `30` | Deadline for completing authentication |
+| `idle-timeout-seconds` | `900` | Disconnect idle sessions after this period (`0` disables) |
+| `max-console-command-length` | `2048` | Console commands longer than this are rejected |
+| `max-console-output-bytes` | `1048576` | Output cap per exec request; overflow prints a truncation marker |
+| `console-command-timeout-ms` | `5000` | How long exec waits for command execution and output before reporting a timeout |
 
-Use `127.0.0.1` for local-only access when supported by your configuration. If remote access is required, explicitly configure the intended network interface and restrict access with your firewall.
+Use `127.0.0.1` for local-only access. If remote access is required, explicitly configure the intended network interface, set strong credentials, and restrict access with your firewall.
 
 
 ### Security recommendations
@@ -79,6 +92,8 @@ ssh -p 2222 <username>@192.0.2.10
 
 Replace `<username>` with an account configured for SSH Server MC.
 
+
+Interactive shells provide server-side line editing: Backspace edits the current line, `Ctrl+C` interrupts the running foreground command (or clears the pending line when idle), and `Ctrl+D` closes the shell from an empty line. Command history keys and completion are not provided by the server.
 ### Execute a Minecraft command
 
 If the account is configured for Minecraft console access, you can execute a command remotely:
@@ -95,6 +110,22 @@ ssh -p 2222 <username>@192.0.2.10 "weather query"
 ```
 
 The available commands depend on the permissions of the connected account and the Minecraft server.
+
+Each exec request ends with a status line and a machine-readable exit code:
+
+| Exit code | Status | Meaning |
+|---|---|---|
+| `0` | `completed` | The command executed successfully in the game thread |
+| `1` | `rejected` | Blank, over-long, unknown or failed command |
+| `2` | `timed_out` | Submitted but not executed within `console-command-timeout-ms` (for example, the server is stopping) |
+| `3` | `completion_unknown` | Could not be submitted (server not ready) — the result is unknown and the command may still run later |
+| `4` | — | Completed, but output exceeded `max-console-output-bytes` and was truncated |
+
+```bash
+ssh -p 2222 mc@192.0.2.10 "list"; echo $?
+# [sshserver] status=completed exit=0
+# 0
+```
 
 ### Run shell commands
 
@@ -150,9 +181,9 @@ Use SFTP to manage files without requiring a graphical file-transfer client.
 
 ### Minecraft commands return incomplete output
 
-Command execution and output collection may depend on the command and the mod version. Some commands may produce delayed or extensive output.
+Exec mode always reports a machine-readable status: check the final `[sshserver] status=... exit=...` line and the shell exit code against the table above. `status=rejected` means the command did not run (blank, too long, unknown, or failed); `status=timed_out` means the game thread did not execute it before `console-command-timeout-ms`; `status=completion_unknown` means it could not be submitted. If output was cut off, the last line of the captured output is a truncation marker naming `max-console-output-bytes`.
 
-If you encounter incomplete results, include the exact command, Minecraft version, mod version, and relevant server logs when reporting the issue.
+When reporting an issue, include the exact command, the status line, exit code, Minecraft version, mod version, and relevant server logs.
 
 ### Interactive terminal applications do not work correctly
 

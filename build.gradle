@@ -14,10 +14,11 @@ java {
 }
 
 repositories {
-    // 国内网络优化：BMCLAPI 镜像 neoforged maven，阿里云镜像 mavenCentral
-    maven { url = 'https://bmclapi2.bangbang93.com/maven' }
+    // 国内网络优化：阿里云镜像优先（junit 等通用依赖秒解析），mavenCentral 放中间，
+    // BMCLAPI 镜像 neoforged maven 放最后兜底——避免国外仓库 connect 挂起拖死构建
     maven { url = 'https://maven.aliyun.com/repository/public' }
     mavenCentral()
+    maven { url = 'https://bmclapi2.bangbang93.com/maven' }
 }
 
 configurations {
@@ -49,6 +50,11 @@ dependencies {
     shaded "org.apache.sshd:sshd-sftp:2.14.0"
     // MINA 2.14 的 EdDSA 只认 net.i2p 实现，缺它 ssh-ed25519 无法协商
     shaded "net.i2p.crypto:eddsa:0.3.0"
+
+    // 单元测试（配置解析/认证/限流/退出码语义等纯逻辑，不依赖 Minecraft 类）
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 // toml 里的 \${version} 由 gradle.properties 的 mod_version 注入（单点维护）
@@ -76,6 +82,71 @@ shadowJar {
 jar { enabled = false }
 assemble { dependsOn shadowJar }
 
+// maven.neoforged.net 在部分网络环境被 DNS 污染（A 记录指向不可达 IP、原 SNI 直连真 IP 也被重置），
+// 而 ModDevGradle 会把它的仓库 sortFirst 到链首，任何未缓存构件先打这里 → 构建挂死/超时。
+// 双重修复（repositories.all 对 MDG 后注册的仓库同样生效——此前用 afterEvaluate，注册晚了看不见）：
+// 1. group 过滤：该仓库只服务 neoforged 生态；junit 等通用依赖走 aliyun/central 链。Gradle 对仓库
+//    连接错误是直接中止解析（不是跳到下一个仓库），所以必须让未缓存构件不打到这个仓库；
+// 2. URL 动态改写：实时经腾讯/阿里 DoH 查 maven.neoforged.net 的 CNAME（CDN77 分发域名，轮换制
+//    故每次查询、失败回退原 URL，正常网络不受影响）。
+def sshserverCdnHolder = [null]
+repositories.all { r ->
+    if (!r.hasProperty('url')) return
+    def u = r.url.toString()
+    if (!u.contains('maven.neoforged.net')) return
+    r.content {
+        includeGroupByRegex('(net\\.neoforged|de\\.oceanlabs|com\\.mojang)(\\..*)?')
+    }
+    if (sshserverCdnHolder[0] == null) {
+        sshserverCdnHolder[0] = ''
+        def endpoints = ['https://doh.pub/resolve?name=maven.neoforged.net&type=A',
+                         'https://dns.alidns.com/resolve?name=maven.neoforged.net&type=A',
+                         'https://dns.google/resolve?name=maven.neoforged.net&type=A']
+        for (ep in endpoints) {
+            def txt = ''
+            try {
+                def conn = new URL(ep).openConnection()
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                txt = conn.getInputStream().getText('UTF-8')
+            } catch (Throwable ignored) {
+                try { // JVM 直连失败时借系统 curl.exe（不走 JVM 代理）
+                    txt = ['curl', '-s', '--max-time', '8', ep].execute().text
+                } catch (Throwable ignored2) {
+                }
+            }
+            if (!txt) continue
+            // A 应答里的 type 5 条目即 CNAME（部分 DoH 对 type=CNAME 查询不回 Answer，故查 A 再取 CNAME）
+            def m = (txt =~ /"type"\s*:\s*5[^}]*"data"\s*:\s*"([^"]+)"/)
+            if (m.find() && m.group(1).contains('.')) {
+                sshserverCdnHolder[0] = m.group(1).replaceAll(/\.$/, '')
+                break
+            }
+        }
+        if (!sshserverCdnHolder[0]) {
+            // DoH 全挂时用 nslookup 查 CNAME 兜底：DNS 污染只改写 A 记录，CNAME 链是干净的
+            try {
+                def out = ['nslookup', 'maven.neoforged.net'].execute().text
+                def m = (out =~ /(?i)canonical name\s*=\s*([^\s]+)/)
+                if (m.find() && m.group(1).contains('.')) {
+                    sshserverCdnHolder[0] = m.group(1).replaceAll(/\.$/, '')
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (!sshserverCdnHolder[0]) {
+            println "[sshserver-build] CDN 查询失败，maven.neoforged.net 仓库保持原 URL（可能受 DNS 污染影响）"
+        }
+    }
+    if (sshserverCdnHolder[0]) {
+        r.url = u.replace('maven.neoforged.net', sshserverCdnHolder[0])
+    }
+}
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+    testLogging { events 'passed', 'skipped', 'failed' }
 }

@@ -1,49 +1,47 @@
 package io.github.woyxiang.sshserver;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
+import java.security.PublicKey;
+import java.time.Duration;
 import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Optional;
 
-import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter;
 import org.apache.sshd.common.keyprovider.FileKeyPairProvider;
+import org.apache.sshd.core.CoreModuleProperties;
 import org.apache.sshd.server.SshServer;
 import org.apache.sshd.server.command.Command;
-import org.apache.sshd.common.Factory;
 import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.config.keys.AuthorizedKeysAuthenticator;
+import org.apache.sshd.server.session.ServerSession;
 import org.apache.sshd.sftp.server.SftpSubsystemFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * SSH 服务器装配：
- * - 双模式登录：虚拟用户（默认 mc）进 MC 控制台会话；其他已配置用户进宿主物理 shell；
- * - 认证：密码（sshserver.properties）+ 可选公钥（authorized_keys/<用户名>，OpenSSH 格式）；
- * - 防爆破：单 IP 失败计数，失败间延迟 3s，累计 3 次断开连接；
- * - SFTP：所有通过认证的用户可用。
+ * - 首启自动生成配置（{@link SshConfig}）：默认仅监听 127.0.0.1、空凭据拒绝一切登录；
+ * - 双模式登录：console-user 进 MC 控制台；其他已配用户进宿主物理 shell；
+ * - 认证：密码（sshserver.properties）+ 公钥（authorized_keys/<用户名>），各自有全局开关；
+ * - 防爆破：按 IP 失败限流（冷却窗口，不 sleep 不占线程）+ MINA 原生
+ *   会话数/每会话认证次数/认证与空闲超时限制；
+ * - 功能开关：shell / console / sftp 全局启停；SFTP 对 console 用户始终禁止。
  *
- * 所有异常吞掉只记日志，绝不影响 MC 进程。
+ * 所有异常吞掉只记日志，绝不影响 MC 进程（配置无效则拒绝启动 SSH 并给出原因）。
  */
 public final class ShellSshServer {
 
-    /** 单 IP 认证失败记录：>=3 次断开。 */
-    private final Map<String, AtomicInteger> failCounts = new ConcurrentHashMap<>();
-    private static final int MAX_FAILS = 3;
-    private static final long FAIL_DELAY_MS = 3000;
+    private final SshConfig config;
+    private final AuthRateLimiter limiter;
+    private final AuthService auth;
+    private Path hostKey;
 
-    private final Path base;
-    private final Properties cfg;
-
-    private ShellSshServer(Path base, Properties cfg) {
-        this.base = base;
-        this.cfg = cfg;
+    private ShellSshServer(SshConfig config) {
+        this.config = config;
+        this.limiter = new AuthRateLimiter(config.authFailuresPerIp(), config.authLockoutSeconds());
+        this.auth = new AuthService(config, limiter);
     }
 
     /** 配置目录：按 mod 惯例放 config 下（<gamedir>/config/sshd），可用 -Dsshserver.base=... 覆盖。 */
@@ -51,100 +49,115 @@ public final class ShellSshServer {
         return McBridge.gameDir().resolve("config").resolve("sshd").toAbsolutePath().normalize();
     }
 
-    /** 启动并阻塞（供线程调用）。bind 失败只记日志，不抛出。 */
+    /** 启动并阻塞（供线程调用）。任何失败只记日志，不抛出。 */
     public static void run(Path base) {
         try {
-            new ShellSshServer(base, loadConfig(base)).run();
+            new ShellSshServer(SshConfig.loadOrCreate(base)).run();
         } catch (Throwable t) {
-            System.out.println("[sshserver] sshd 退出: " + McBridge.rootMessage(t));
+            LOG.error("[sshserver] sshd 启动失败: {}", McBridge.rootMessage(t));
         }
     }
 
-    private static Properties loadConfig(Path base) throws IOException {
-        Path file = base.resolve("sshserver.properties");
-        if (!Files.isRegularFile(file)) {
-            throw new IOException("缺少配置文件 " + file + "（参考 README 生成）");
+    private void run() throws IOException {
+        SshServer sshd = build();
+        try {
+            sshd.start();
+        } catch (Throwable t) {
+            throw new IOException("sshd 监听 " + config.bind() + ":" + config.port() + " 失败: "
+                    + McBridge.rootMessage(t), t);
         }
-        Properties cfg = new Properties();
-        try (InputStream in = Files.newInputStream(file)) {
-            cfg.load(in);
+        summary();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                sshd.stop(true);
+            } catch (Throwable ignored) {
+                // 进程正在退出
+            }
+        }, "sshserver-stop"));
+        try {
+            Thread.currentThread().join(); // 常驻
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        return cfg;
     }
 
-    private void run() throws IOException, InterruptedException, java.security.GeneralSecurityException {
-        int port = Integer.parseInt(cfg.getProperty("port", "2222"));
-        String bind = cfg.getProperty("bind", "0.0.0.0");
-        String consoleUser = cfg.getProperty("console-user", "mc").trim();
-
+    /** 装配但不启动（配置/密钥错误在监听端口前就抛出，不留半生效状态）。 */
+    private SshServer build() throws IOException {
         SshServer sshd = SshServer.setUpDefaultServer();
-        sshd.setHost(bind);
-        sshd.setPort(port);
-        sshd.setKeyPairProvider(new FileKeyPairProvider(ensureHostKey()));
-        sshd.setPasswordAuthenticator(this::authenticate);
-        sshd.setPublickeyAuthenticator(this::authenticateKey);
+        sshd.setHost(config.bind());
+        sshd.setPort(config.port());
+        hostKey = HostKeyManager.ensureKey(config.base());
+        sshd.setKeyPairProvider(new FileKeyPairProvider(hostKey));
+        if (config.passwordAuthEnabled()) {
+            sshd.setPasswordAuthenticator(this::authenticate);
+        }
+        if (config.publicKeyAuthEnabled()) {
+            sshd.setPublickeyAuthenticator(this::authenticateKey);
+        }
 
-        sshd.setCommandFactory((channel, command) -> {
-            String username = channel.getServerSession().getUsername();
-            if (username.equals(consoleUser) && !consoleUser.isEmpty()) {
-                return new McConsoleCommand(command); // exec 模式：command 作为初始 MC 命令
-            }
-            return new PhysicalShellCommand(BashShell.execCommand(command));
-        });
-        sshd.setShellFactory(channel -> {
-            String username = channel.getServerSession().getUsername();
-            if (username.equals(consoleUser) && !consoleUser.isEmpty()) {
-                return new McConsoleCommand(null); // 交互模式
-            }
-            return new PhysicalShellCommand(BashShell.interactiveCommand());
-        });
-        sshd.setSubsystemFactories(List.of(new SftpSubsystemFactory() { // console 用户禁用 SFTP
-            @Override
-            public Command createSubsystem(ChannelSession channel) throws IOException {
-                if (channel.getServerSession().getUsername().equals(consoleUser)) {
-                    throw new IOException("SFTP disabled for console user '" + consoleUser + "'");
+        // 资源限制：MINA 原生强制执行（并发会话数 / 每会话认证次数 / 认证阶段与空闲超时）
+        var props = sshd.getProperties();
+        props.put(CoreModuleProperties.MAX_CONCURRENT_SESSIONS.getName(), config.maxConnections());
+        props.put(CoreModuleProperties.MAX_AUTH_REQUESTS.getName(), config.maxAuthRequests());
+        // 注意：值必须是 MINA 的「存储格式」——getProperties() 是裸 map，绕过 Property.toStorage()：
+        // Duration 若直接塞对象，会话 announce 阶段会数字解析 "PT30S" 抛 NumberFormatException，
+        // 连接在发 banner 前就被静默关闭；DurationProperty 正确存储格式是毫秒 Long（读取端 toLong→ofMillis）。
+        props.put(CoreModuleProperties.AUTH_TIMEOUT.getName(), Duration.ofSeconds(config.authTimeoutSeconds()).toMillis());
+        if (config.idleTimeoutSeconds() > 0) {
+            props.put(CoreModuleProperties.IDLE_TIMEOUT.getName(), Duration.ofSeconds(config.idleTimeoutSeconds()).toMillis());
+        }
+
+        sshd.setCommandFactory((channel, command) -> route(channel, command));
+        sshd.setShellFactory(channel -> route(channel, null));
+        if (config.sftpEnabled()) {
+            sshd.setSubsystemFactories(List.of(new SftpSubsystemFactory() { // console 用户禁用 SFTP
+                @Override
+                public Command createSubsystem(ChannelSession channel) throws IOException {
+                    if (isConsoleUser(channel)) {
+                        throw new IOException("SFTP disabled for console user '" + config.consoleUser() + "'");
+                    }
+                    return super.createSubsystem(channel);
                 }
-                return super.createSubsystem(channel);
-            }
-        }));
-
-        sshd.start();
-        String modes = "shell=[" + String.join(",", users().keySet()) + "]"
-                + (consoleUser.isEmpty() ? "" : " console=[" + consoleUser + "]");
-        System.out.printf("[sshserver] sshd listening on %s:%d (base=%s, %s)%n", bind, port, base, modes);
-        Thread.currentThread().join(); // 常驻
-    }
-
-    /** 用户名 → 密码。users=root:pwd1,admin:pwd2；console-user 的密码单独配 console-password。 */
-    private Map<String, String> users() {
-        Map<String, String> m = new ConcurrentHashMap<>();
-        for (String entry : cfg.getProperty("users", "").split(",")) {
-            String e = entry.trim();
-            int i = e.indexOf(':');
-            if (i > 0 && i < e.length() - 1) {
-                m.put(e.substring(0, i).trim(), e.substring(i + 1).trim());
-            }
+            }));
         }
-        return m;
+        return sshd;
     }
 
-    private boolean authenticate(String username, String password, org.apache.sshd.server.session.ServerSession session) {
-        boolean ok;
-        if (cfg.getProperty("console-user", "mc").trim().equals(username)) {
-            ok = !cfg.getProperty("console-password", "").isEmpty()
-                    && cfg.getProperty("console-password").equals(password);
-        } else {
-            String expect = users().get(username);
-            ok = expect != null && !expect.isEmpty() && constantTimeEquals(expect, password);
+    /** 按用户与功能开关路由：console 用户 → MC 控制台，其余 → 物理 shell；开关关闭则拒绝开通道。 */
+    private Command route(ChannelSession channel, String command) throws IOException {
+        if (isConsoleUser(channel)) {
+            if (!config.consoleEnabled()) {
+                throw new IOException("MC 控制台功能已禁用（console-enabled=false）");
+            }
+            return (command == null || command.isBlank())
+                    ? new McConsoleCommand()
+                    : new ConsoleExecCommand(command, config);
         }
-        log("auth", username + " from=" + session.getRemoteAddress() + " ok=" + ok);
-        // 公钥失败不计数不延迟：客户端按顺序尝试多个 key 是正常协商，防爆破只针对密码
-        return ok;
+        if (!config.shellEnabled()) {
+            throw new IOException("Shell 功能已禁用（shell-enabled=false）");
+        }
+        return new PhysicalShellCommand(command == null
+                ? BashShell.interactiveCommand()
+                : BashShell.execCommand(command), command == null);
     }
 
-    private boolean authenticateKey(String username, java.security.PublicKey key,
-                                    org.apache.sshd.server.session.ServerSession session) {
-        Path file = base.resolve("authorized_keys").resolve(username);
+    private boolean isConsoleUser(ChannelSession channel) {
+        String consoleUser = config.consoleUser();
+        return !consoleUser.isEmpty() && consoleUser.equals(channel.getServerSession().getUsername());
+    }
+
+    private boolean authenticate(String username, String password, ServerSession session) {
+        String ip = ipOf(session).orElse(null);
+        AuthService.Result result = auth.passwordAuth(username, password, ip);
+        log("auth", username + " from=" + session.getRemoteAddress() + " result=" + result.name().toLowerCase());
+        if (result == AuthService.Result.LOCKED) {
+            session.close(true); // 冷却期内快速断开，不给继续尝试的机会
+        }
+        return result == AuthService.Result.OK;
+    }
+
+    private boolean authenticateKey(String username, PublicKey key, ServerSession session) {
+        Path file = config.base().resolve("authorized_keys").resolve(username);
         if (!Files.isRegularFile(file)) {
             return false;
         }
@@ -155,75 +168,55 @@ public final class ShellSshServer {
             log("pubkey", "读取/解析 " + file + " 失败: " + McBridge.rootMessage(t));
             ok = false;
         }
+        // 公钥失败不计数：客户端按顺序尝试多个 key 是正常协商，防爆破只针对密码
         log("pubkey", username + " from=" + session.getRemoteAddress() + " ok=" + ok);
-        return handleFailure(session, ok);
+        return ok;
     }
 
-    /** 失败处理：延迟拖慢爆破 + 计数达标断开。返回原 ok。 */
-    private boolean handleFailure(org.apache.sshd.server.session.ServerSession session, boolean ok) {
-        if (ok) {
-            ipOf(session).ifPresent(ip -> failCounts.remove(ip));
-            return true;
+    /** 启动摘要：不输出任何秘密；凭据未配置、非本机监听等安全状态一目了然。 */
+    private void summary() {
+        for (String w : config.warnings()) {
+            log("config", "警告: " + w);
         }
-        try {
-            Thread.sleep(FAIL_DELAY_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        log("sshd", "listening on " + config.bind() + ":" + config.port()
+                + (config.isLoopbackBind() ? "（仅本机访问）" : "（⚠ 对网络开放）"));
+        log("auth", "password=" + onOff(config.passwordAuthEnabled())
+                + " pubkey=" + onOff(config.publicKeyAuthEnabled())
+                + " console-user=" + (config.consoleUser().isEmpty() ? "(none)" : config.consoleUser())
+                + " console-password=" + (config.consolePassword().isEmpty() ? "未设置（控制台登录禁用）" : "已设置"));
+        if (config.noCredentialsConfigured()) {
+            log("auth", "未配置任何可用凭据，所有登录都会被拒绝（请设置 users 或 console-password）");
         }
-        return ipOf(session).map(ip -> {
-            int n = failCounts.computeIfAbsent(ip, k -> new AtomicInteger()).incrementAndGet();
-            if (n >= MAX_FAILS) {
-                log("auth", "too many failures from " + ip + ", closing session");
-                failCounts.remove(ip);
-                session.close(true);
-            }
-            return false;
-        }).orElse(false);
+        log("features", "shell=" + onOff(config.shellEnabled())
+                + " console=" + onOff(config.consoleEnabled())
+                + " sftp=" + onOff(config.sftpEnabled())
+                + (config.users().isEmpty() ? "" : " shell-users=" + String.join(",", config.users().keySet())));
+        log("limits", "max-connections=" + config.maxConnections()
+                + " max-auth-requests=" + config.maxAuthRequests()
+                + " auth-failures-per-ip=" + config.authFailuresPerIp()
+                + "/lockout-" + config.authLockoutSeconds() + "s"
+                + " auth-timeout=" + config.authTimeoutSeconds() + "s"
+                + " idle-timeout=" + config.idleTimeoutSeconds() + "s");
+        String fp = HostKeyManager.fingerprint(hostKey);
+        log("hostkey", (fp != null ? fp : "指纹不可用") + " (" + hostKey + ")");
+        log("config", String.valueOf(config.file()));
     }
 
-    private static java.util.Optional<String> ipOf(org.apache.sshd.server.session.ServerSession session) {
+    private static String onOff(boolean b) {
+        return b ? "on" : "off";
+    }
+
+    private static Optional<String> ipOf(ServerSession session) {
         try {
-            return java.util.Optional.of(((InetSocketAddress) session.getRemoteAddress()).getAddress().getHostAddress());
+            return Optional.of(((InetSocketAddress) session.getRemoteAddress()).getAddress().getHostAddress());
         } catch (Throwable t) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
     }
 
-    private static boolean constantTimeEquals(String a, String b) {
-        byte[] x = a.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] y = b.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        int r = x.length ^ y.length;
-        for (int i = 0; i < Math.min(x.length, y.length); i++) {
-            r |= x[i] ^ y[i];
-        }
-        return r == 0;
-    }
-
-    private Path ensureHostKey() throws IOException, java.security.GeneralSecurityException {
-    /** 主机密钥：不存在则自动生成 Ed25519（OpenSSH PEM 格式写入）。 */
-        Path key = base.resolve("ssh_host_ed25519_key");
-        if (Files.isRegularFile(key)) {
-            return key;
-        }
-        Files.createDirectories(base);
-        Files.createDirectories(base);
-        // 必须用 i2p 的 EdDSA provider 生成：MINA 的 OpenSSH 编码器会把私钥 cast 成
-        // net.i2p.crypto.eddsa.EdDSAPrivateKey，用 JDK 内置 sun.security.ec.ed 生成会 ClassCastException
-        // i2p provider 注册的算法名是 "EdDSA"（KeyPairGenerator.EdDSA，OID 1.3.101.112 别名 Ed25519）
-        KeyPairGenerator kpg = KeyPairGenerator.getInstance("EdDSA", "EdDSA");
-        KeyPair kp = kpg.generateKeyPair();
-        try (var os = Files.newOutputStream(key)) {
-            OpenSSHKeyPairResourceWriter.INSTANCE.writePrivateKey(kp, null, null, os);
-        }
-        try (var os = Files.newOutputStream(base.resolve("ssh_host_ed25519_key.pub"))) {
-            OpenSSHKeyPairResourceWriter.INSTANCE.writePublicKey(kp.getPublic(), "sshserver host key", os);
-        }
-        log("hostkey", "生成 Ed25519 主机密钥 " + key);
-        return key;
-    }
-
+    private static final Logger LOG = LoggerFactory.getLogger("sshserver");
     private static void log(String tag, String msg) {
-        System.out.printf("[sshserver] %s: %s%n", tag, msg);
+        LOG.info("[sshserver] {}: {}", tag, msg);
     }
 
     /** 独立运行入口：java -cp sshserver.jar io.github.woyxiang.sshserver.ShellSshServer（无 MC，控制台模式降级）。 */

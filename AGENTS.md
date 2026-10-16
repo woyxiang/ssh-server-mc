@@ -1,3 +1,10 @@
+# Project
+
+## 测试
+
+把 mod 放到 `test/server/mods`，然后启动服务器测试 `test/server/run nogui`
+用 tmux 测试交互式 shell
+
 # Communication
 * 始终使用自然、地道的简体中文。
 * 优先最终结果质量，不追求速度。

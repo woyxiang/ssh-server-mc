@@ -29,19 +29,11 @@ final class McConsoleCommand implements Command {
     private ExitCallback exit;
     private volatile Thread readerThread;
     private volatile LogTailer tailer;
-    /** exec 模式（ssh mc@host "list"）携带的初始命令；交互模式为 null。 */
-    private final String initialCommand;
-    /** exec 模式下命令执行后的保持窗口（等日志回显），到点退出。 */
-    private static final long EXEC_HOLD_MS = 3000;
 
     /** 交互编辑缓冲：tailer 重绘与 reader 线程共同访问，一律在 synchronized(out) 内。 */
     private final StringBuilder buffer = new StringBuilder();
-    /** 交互模式标记：true 时 tailer 回放/推送后重绘提示符与缓冲。 */
-    private boolean editing;
 
-    McConsoleCommand(String initialCommand) {
-        this.initialCommand = (initialCommand == null || initialCommand.isBlank()) ? null : initialCommand.trim();
-    }
+    McConsoleCommand() {}
 
     @Override
     public void setInputStream(InputStream in) { this.in = in; }
@@ -57,54 +49,29 @@ final class McConsoleCommand implements Command {
 
     @Override
     public void start(ChannelSession channel, Environment env) throws IOException {
-        if (initialCommand == null) {
-            write(motd());
+        write(motd());
+        synchronized (out) {
+            buffer.setLength(0);
+            write(PROMPT); // 先于 tailer 启动，回放自然接在提示符之后
+        }
+        LogTailer.Hooks hooks = text -> {
             synchronized (out) {
-                editing = true;
-                buffer.setLength(0);
-                write(PROMPT); // 先于 tailer 启动，回放自然接在提示符之后
-            }
-        } else {
-            write("[sshserver] exec: " + initialCommand + "\r\n");
-            if (!McBridge.dispatch(initialCommand)) {
-                write("[sshserver] 服务器未就绪，命令未执行\r\n");
-            }
-        }
-        LogTailer.Hooks hooks = null;
-        if (editing) {
-            hooks = text -> {
-                synchronized (out) {
-                    try {
-                        out.write("\r\u001b[2K".getBytes(StandardCharsets.UTF_8)); // 清掉输入行
-                        out.write(text.replace("\n", "\r\n").getBytes(StandardCharsets.UTF_8));
-                        out.write((PROMPT + buffer).getBytes(StandardCharsets.UTF_8)); // 重绘
-                        out.flush();
-                    } catch (IOException ignored) {
-                        // 会话断开，tailer 下轮停止
-                    }
+                try {
+                    out.write("\r\u001b[2K".getBytes(StandardCharsets.UTF_8)); // 清掉输入行
+                    out.write(text.replace("\n", "\r\n").getBytes(StandardCharsets.UTF_8));
+                    out.write((PROMPT + buffer).getBytes(StandardCharsets.UTF_8)); // 重绘
+                    out.flush();
+                } catch (IOException ignored) {
+                    // 会话断开，tailer 下轮停止
                 }
-            };
-        }
-        tailer = new LogTailer(LogTailer.defaultLogFile(), TtyFilter.onlcrOut(out),
-                editing ? REPLAY_BYTES : 0, hooks);
+            }
+        };
+        tailer = new LogTailer(LogTailer.defaultLogFile(), TtyFilter.onlcrOut(out), REPLAY_BYTES, hooks);
         Thread t = new Thread(tailer, "sshserver-logtail");
         t.setDaemon(true);
         t.start();
 
-        if (initialCommand != null) {
-            // exec 模式：不读 stdin（客户端可能永远不发 EOF），命令已派发，hold 到点即退出
-            readerThread = new Thread(() -> {
-                try {
-                    Thread.sleep(EXEC_HOLD_MS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    shutdown();
-                }
-            }, "sshserver-exec");
-        } else {
-            readerThread = new Thread(() -> readLoop(channel), "sshserver-console-reader");
-        }
+        readerThread = new Thread(() -> readLoop(channel), "sshserver-console-reader");
         readerThread.setDaemon(true);
         readerThread.start();
     }

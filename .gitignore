@@ -21,11 +21,12 @@ test/tmux-logs/
 # OS
 Thumbs.db
 .DS_Store
-# AI 协作工具配置（个人）
-.agents/
-.pi/
+
 # AI 协作工具配置（个人）
 .agents/
 .pi/
 __pycache__/
 *.pyc
+
+# 需求文档（按要求不入库）
+SSH-Server-MC-Improvement-Plan-and-Requirements.md
