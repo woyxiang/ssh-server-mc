@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: [v*]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gradle 构建缓存 + wrapper 校验
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 测试 + 构建发行 JAR + SHA-256 校验和（REL-02/05）
+      - run: ./gradlew build releaseChecksums --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sshserver-jar
+          path: |
+            build/libs/*.jar
+            build/libs/*.sha256
+          if-no-files-found: error

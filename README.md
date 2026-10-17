@@ -226,10 +226,13 @@ Please avoid posting credentials or production configuration files in public iss
 
 ## License
 
-See the [LICENSE](LICENSE) file for the project's license.
+This project is licensed under the [MIT License](LICENSE).
 
-Third-party dependencies may be distributed under their own licenses.
-
+Bundled third-party components carry their own licenses: Apache MINA SSHD 2.14.0
+(Apache License 2.0, see [LICENSE-APACHE](LICENSE-APACHE) and [NOTICE](NOTICE)) and
+net.i2p.crypto:eddsa 0.3.0 (CC0 1.0). The complete list is in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md); the release JAR ships all of
+these files at its root.
 ## Disclaimer
 
 SSH Server MC provides remote access to a Minecraft server and may expose operating system command execution or server file access, depending on its configuration.

@@ -7,7 +7,12 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
 ### Added
+
+- GitHub Actions CI（`.github/workflows/ci.yml`）：Gradle 构建缓存、单元测试、
+  构建发行 JAR 与 SHA-256 校验和并归档产物（REL-02）。
 
 - `Gradle Wrapper 8.10.2`（`gradlew` / `gradlew.bat`），固定构建工具版本并校验发行包
   SHA-256，实现可复现构建（REL-01）。
@@ -22,6 +27,12 @@
   Minecraft `[1.21.1,1.21.2)`；此前声明的 `[21.1.0,)` / `[1.21,1.22)` 超出实测矩阵
   （FR-12，先窄后宽）。使用未声明版本组合的用户需升级 NeoForge/Minecraft 版本。
 
+- README「License」一节改为明确 MIT 许可与随附第三方组件许可声明（FR-07）。
+
+### Fixed
+
+- 版本号注入：修复修改 `mod_version` 后增量构建仍把旧版本号打进 jar 的问题
+  （`processResources` 未声明展开属性为任务输入）。
 ## [0.1.0] - 2026-10-16
 
 ### Added
@@ -61,6 +72,7 @@
   MC 控制台命令（虚拟用户）与 SFTP 文件传输；密码与可选公钥认证；
   Ed25519 Host Key 首次启动生成。
 
-[Unreleased]: https://github.com/woyxiang/ssh-server-mc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/woyxiang/ssh-server-mc/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/woyxiang/ssh-server-mc/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/woyxiang/ssh-server-mc/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/woyxiang/ssh-server-mc/releases/tag/v0.0.1

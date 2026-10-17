@@ -59,6 +59,8 @@ dependencies {
 
 // toml 里的 \${version} 由 gradle.properties 的 mod_version 注入（单点维护）
 processResources {
+    // mod_version 是展开输入：不声明则改版本号后增量构建不会重新展开 ${version}（会把旧版本号打进 jar）
+    inputs.property('mod_version', project.mod_version)
     filesMatching('META-INF/neoforge.mods.toml') {
         expand 'version': project.mod_version
     }
