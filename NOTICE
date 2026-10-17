@@ -1,0 +1,15 @@
+SSH Server MC
+Copyright 2026 woyxiang
+
+This product bundles software developed at The Apache Software Foundation
+(http://www.apache.org/):
+
+  Apache MINA SSHD (sshd-core, sshd-common, sshd-sftp) 2.14.0
+  Copyright 2018-2024 The Apache Software Foundation
+
+  This product includes software developed at
+  The Apache Software Foundation (http://www.apache.org/).
+
+The full Apache License, Version 2.0 text is in LICENSE-APACHE in this
+distribution. See THIRD-PARTY-LICENSES.md for the complete list of bundled
+third-party components and their licenses.

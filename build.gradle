@@ -76,6 +76,24 @@ shadowJar {
             'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/INDEX.LIST',
             'META-INF/versions/**/module-info.class', 'module-info.class'
     mergeServiceFiles()
+    // 发行合规（REL-05/THIRD-PARTY-LICENSES.md）：随包携带许可证与归属声明。
+    // 上游 shaded 依赖的 META-INF/LICENSE|NOTICE 被上方规则排除（同名会互相覆盖），
+    // 由根目录 LICENSE-APACHE/NOTICE 承载 Apache-2.0 全文与归属，满足再分发要求。
+    from('LICENSE', 'LICENSE-APACHE', 'NOTICE', 'THIRD-PARTY-LICENSES.md')
+}
+
+// REL-05：发行物 SHA-256 校验和（发布前运行 releaseChecksums，生成 .sha256 文件）
+tasks.register('releaseChecksums') {
+    dependsOn shadowJar
+    doLast {
+        def jar = tasks.shadowJar.archiveFile.get().asFile
+        def md = java.security.MessageDigest.getInstance('SHA-256')
+        jar.withInputStream { fis -> byte[] buf = new byte[8192]; int n; while ((n = fis.read(buf)) > 0) md.update(buf, 0, n) }
+        def hex = md.digest().collect { String.format('%02x', it & 0xff) }.join('')
+        def out = new File(jar.parentFile, jar.name + '.sha256')
+        out.text = hex + '  ' + jar.name + '\n'
+        println "[sshserver-build] SHA-256 ${hex}  ${jar.name}"
+    }
 }
 
 // shadowJar 取代默认 jar 作为构建产物
