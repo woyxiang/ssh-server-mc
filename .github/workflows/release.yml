@@ -1,0 +1,82 @@
+name: Release
+
+# 推送 v* tag 时自动：构建 → 提取 CHANGELOG 对应版本章节 → 发布到
+# GitHub Release、Modrinth、CurseForge。
+on:
+  push:
+    tags: ['v*']
+
+# softprops/action-gh-release 创建 Release 需要 contents: write
+permissions:
+  contents: write
+
+env:
+env:
+  # Modrinth 项目 ID（已创建：https://modrinth.com/mod/ssh-server，草稿状态）
+  MODRINTH_PROJECT_ID: 'X721z0qd'
+  # CurseForge 项目 ID（已手动创建，ID 1758990）；为空时 CF 发布步骤自动跳过
+  CURSEFORGE_PROJECT_ID: '1758990'
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gradle 构建缓存 + wrapper 校验
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 测试 + 构建发行 JAR + SHA-256 校验和（与 ci.yml 同一构建口径）
+      - run: ./gradlew build releaseChecksums --no-daemon
+
+      # 版本号（去 v 前缀，与 mods.toml 的 ${version} 一致）+ 发布说明
+      - id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Keep a Changelog：按字面量精确匹配 "## [x.y.z]" 章节头（index 而非正则，
+          # 无转义歧义，0.1.1 不会误匹配 0.1.10），截到下一个 "## " 标题为止
+          awk -v ver="$VERSION" '
+            BEGIN { pat = "## [" ver "]" }
+            index($0, pat) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md | sed '/./,$!d' > changelog-section.md
+          if [ ! -s changelog-section.md ]; then
+            echo "::error::CHANGELOG.md 中没有版本 [$VERSION] 的章节，请先补充后再打 tag"
+            exit 1
+          fi
+
+      # GitHub Release：JAR + SHA-256 + 发布说明
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: SSH Server ${{ github.ref_name }}
+          body_path: changelog-section.md
+          files: |
+            build/libs/*.jar
+            build/libs/*.sha256
+
+      # Modrinth 发布
+      - uses: Kir-Antipov/mc-publish@v3.3
+        with:
+          modrinth-id: ${{ env.MODRINTH_PROJECT_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: build/libs/*.jar
+          name: SSH Server ${{ github.ref_name }}
+          version: ${{ steps.meta.outputs.version }}
+          version-type: release
+          changelog-file: changelog-section.md
+          loaders: neoforge
+          # 与 neoforge.mods.toml 的 minecraft 依赖范围保持一致，升级 MC 版本时同步更新
+          game-versions: 1.21.1
+          java: 21
+
+      # CurseForge 发布（项目须在 console.curseforge.com 手动创建并过审核后，
+      # 把数字 ID 填入上方 CURSEFORGE_PROJECT_ID；为空时跳过本步骤）
+      - if: env.CURSEFORGE_PROJECT_ID != ''
+        uses: Kir-Antipov/mc-publish@v3.3
+        with:

@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
+    # tag 推送由 release.yml 处理（构建+发布），这里不再触发避免重复构建
     branches: [main]
-    tags: [v*]
   pull_request:
 
 permissions:
