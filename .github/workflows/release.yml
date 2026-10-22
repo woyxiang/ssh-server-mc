@@ -11,7 +11,6 @@ permissions:
   contents: write
 
 env:
-env:
   # Modrinth 项目 ID（已创建：https://modrinth.com/mod/ssh-server，草稿状态）
   MODRINTH_PROJECT_ID: 'X721z0qd'
   # CurseForge 项目 ID（已手动创建，ID 1758990）；为空时 CF 发布步骤自动跳过
