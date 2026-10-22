@@ -6,6 +6,7 @@ license="MIT"
 modId="sshserver"
 version="${version}"
 displayName="SSH Server"
+logoFile="assets/sshserver/logo-128.png"
 description="Embedded SSH server for NeoForge servers: physical shell access with real usernames, MC console mode via a virtual user, and SFTP. No external sshd required."
 authors="woyxiang"
 

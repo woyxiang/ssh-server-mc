@@ -7,16 +7,23 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-22
 ### Added
+
+- Mod 图标：发行 JAR 与 Modrinth 项目页展示 logo（jar 内 `assets/sshserver/logo-128.png`）。
 
 - GitHub Actions 发布流程（`.github/workflows/release.yml`）：推送 `v*` tag 自动构建并发布
   到 GitHub Release（JAR + SHA-256）、Modrinth 与 CurseForge；发布说明自动取自 CHANGELOG.md
   对应版本章节，缺失时构建失败提醒补齐。发布凭证走仓库 Secrets：`MODRINTH_TOKEN`、
-  `CURSEFORGE_TOKEN`；项目 ID 需填入 workflow 顶部 `env`。
+  `CURSEFORGE_TOKEN`；Modrinth 与 CurseForge 项目 ID 已配置在 workflow 顶部 `env`。
 - Modrinth 项目已创建并配置：https://modrinth.com/mod/ssh-server（草稿态，待补版本后提交审核）；
   CurseForge 项目已手动创建并填入 ID 1758990，项目过审前 CF 上传可能报错（GitHub/Modrinth
   发布不受影响）；`CURSEFORGE_PROJECT_ID` 为空时发布流程自动跳过 CurseForge 步骤。
 - `.github/workflows/ci.yml` 移除 tag 触发：tag 推送改由发布流程统一构建，避免重复构建。
+
+### Changed
+
+- `gradle.properties` 版本号 0.1.1 → 0.1.2。
 ## [0.1.1] - 2026-10-17
 
 ### Added
