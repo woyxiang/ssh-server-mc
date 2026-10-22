@@ -79,3 +79,14 @@ jobs:
       - if: env.CURSEFORGE_PROJECT_ID != ''
         uses: Kir-Antipov/mc-publish@v3.3
         with:
+          curseforge-id: ${{ env.CURSEFORGE_PROJECT_ID }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          files: build/libs/*.jar
+          name: SSH Server ${{ github.ref_name }}
+          version: ${{ steps.meta.outputs.version }}
+          version-type: release
+          changelog-file: changelog-section.md
+          loaders: neoforge
+          # 与 neoforge.mods.toml 的 minecraft 依赖范围保持一致，升级 MC 版本时同步更新
+          game-versions: 1.21.1
+          java: 21
